@@ -6,37 +6,45 @@ import (
 	"os/exec"
 	"path"
 	"regexp"
+	"strings"
 	"syscall"
 
-	shellwords "github.com/mattn/go-shellwords"
-	ini "gopkg.in/ini.v1"
+	"github.com/mattn/go-shellwords"
+	"gopkg.in/ini.v1"
 )
 
-var backtickRE = regexp.MustCompile("`[^`]*`")
-var aliasFile = path.Join(os.Getenv("HOME"), ".docker/alias")
+var (
+	backtickRE = regexp.MustCompile("`[^`]*`")
+	aliasFile  = path.Join(os.Getenv("HOME"), ".aliaser")
+	target     string
+)
 
 func init() {
 	shellwords.ParseBacktick = true
+
+	if _, err := os.Stat(aliasFile); os.IsNotExist(err) {
+		log.Fatal("Configure your aliases in ~/.aliaser first.")
+	}
 }
 
 func main() {
-	if _, err := os.Stat(aliasFile); os.IsNotExist(err) {
-		execDocker()
-	}
-
-	cfg, err := ini.Load(aliasFile)
-	if err != nil {
-		log.Fatal(err)
-	}
+	loadTarget()
 
 	if len(os.Args) > 1 {
-		section := cfg.Section("")
-		if section.HasKey(os.Args[1]) {
-			execAlias(section.Key(os.Args[1]).String())
+		config, err := ini.Load(aliasFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		section, err := config.GetSection(target)
+		if err == nil {
+			if section.HasKey(os.Args[1]) {
+				execAlias(section.Key(os.Args[1]).String())
+			}
 		}
 	}
 
-	execDocker()
+	execTarget()
 }
 
 func execAlias(commandStr string) {
@@ -46,27 +54,39 @@ func execAlias(commandStr string) {
 		log.Fatal(err)
 	}
 
-	execDocker(args)
+	execTarget(args)
 }
 
-func execDocker(args ...[]string) {
-	var dockerArgs []string
-
-	docker, _ := exec.LookPath("docker")
+func execTarget(args ...[]string) {
+	targetPath, _ := exec.LookPath(target)
+	targetArgs := []string{targetPath}
 
 	if len(args) > 0 {
-		dockerArgs = append([]string{docker}, args[0]...)
+		targetArgs = append(targetArgs, args[0]...)
 	} else {
-		dockerArgs = os.Args
+		targetArgs = append(targetArgs, os.Args[1:]...)
 	}
 
-	err := syscall.Exec(docker, dockerArgs, os.Environ())
+	err := syscall.Exec(targetPath, targetArgs, os.Environ())
 	if err != nil {
-		log.Fatalf("Error exec docker: %v", err)
+		log.Fatalf("Error exec %v: %v", target, err)
 	}
 }
 
 func parseBacktick(backtickStr []byte) []byte {
 	result, _ := shellwords.Parse(string(backtickStr))
-	return []byte(result[0])
+	return []byte(strings.Join(result, ""))
+}
+
+func loadTarget() {
+	config, err := ini.Load(aliasFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	myName := path.Base(os.Args[0])
+	section := config.Section("core")
+	if section.HasKey(myName) {
+		target = section.Key(myName).String()
+	}
 }
